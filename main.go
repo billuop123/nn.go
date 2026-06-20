@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"strconv"
+
+	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
 type Mat struct {
@@ -199,7 +202,37 @@ func nnCost(ti Mat, to Mat) (float64, error) {
 	return mse / float64(total), nil
 }
 
+func drawCost(cost []float32, maxEpochs int) {
+	var maxCost float32 = 0
+	for _, c := range cost {
+		if maxCost <= c {
+			maxCost = c
+		}
+	}
+	var padding float32 = 40.0
+	var h float32 = 370
+	var w float32 = 720
+	for i := 1; i < len(cost); i++ {
+		x1 := padding + float32(i-1)/float32(maxEpochs)*w
+		y1 := padding + (1-cost[i-1]/maxCost)*h
+		x2 := padding + float32(i)/float32(maxEpochs)*w
+		y2 := padding + (1-cost[i]/maxCost)*h
+		rl.DrawLineEx(
+			rl.Vector2{X: x1, Y: y1},
+			rl.Vector2{X: x2, Y: y2},
+			2,
+			rl.Green,
+		)
+	}
+}
+
 func main() {
+	var cost []float32
+	w := 800
+	h := 450
+	rl.InitWindow(800, 450, "Custom Neuron Network for XOR")
+	defer rl.CloseWindow()
+	rl.SetTargetFPS(25)
 	nn, err := nnForm([]int{2, 8, 1})
 	if err != nil {
 		fmt.Println(err)
@@ -210,32 +243,41 @@ func main() {
 		{rows: 2, cols: 1, data: [][]float64{{1}, {0}}},
 		{rows: 2, cols: 1, data: [][]float64{{1}, {1}}},
 	}
-	targets := [][][]float64{{{0}}, {{1}}, {{1}}, {{0}}}
+	targets := [][][]float64{
+		{{0}},
+		{{1}},
+		{{1}},
+		{{0}},
+	}
 	const epochs int = 10000
 	L := len(nn.size) - 1
 	lr := 0.1
-	for epoch := range epochs {
-		for i := range len(inputs) {
-			if err = nnForward(nn, inputs[i]); err != nil {
-				fmt.Println(err)
-				return
+	epoch := 0
+	for !rl.WindowShouldClose() {
+		for range 50 {
+			if epoch > epochs {
+				break
 			}
-			val, dz := finalGrad(nn.a[L].data, targets[i], nn.a[L-1].data)
-			nn.w[L-1] = matSub(nn.w[L-1], scaleMat(val, lr))
-			for k := range nn.size[L] {
-				a := nn.a[L].data[k][0]
-				y := targets[i][k][0]
-				nn.b[L-1].data[k][0] -= lr * (-2 * (y - a) * a * (1 - a))
-			}
-			dW, dB := hiddenGrad(dz, nn.w[:L-1], nn.a[:L-1], nn.z[1:], nn.w[L-1])
-			for i := range len(dW) {
-				nn.w[i] = matSub(nn.w[i], scaleMat(dW[i], lr))
-				for k := range len(dB[i]) {
-					nn.b[i].data[k][0] -= lr * dB[i][k]
+			for i := range len(inputs) {
+				if err = nnForward(nn, inputs[i]); err != nil {
+					fmt.Println(err)
+					return
+				}
+				val, dz := finalGrad(nn.a[L].data, targets[i], nn.a[L-1].data)
+				nn.w[L-1] = matSub(nn.w[L-1], scaleMat(val, lr))
+				for k := range nn.size[L] {
+					a := nn.a[L].data[k][0]
+					y := targets[i][k][0]
+					nn.b[L-1].data[k][0] -= lr * (-2 * (y - a) * a * (1 - a))
+				}
+				dW, dB := hiddenGrad(dz, nn.w[:L-1], nn.a[:L-1], nn.z[1:], nn.w[L-1])
+				for i := range len(dW) {
+					nn.w[i] = matSub(nn.w[i], scaleMat(dW[i], lr))
+					for k := range len(dB[i]) {
+						nn.b[i].data[k][0] -= lr * dB[i][k]
+					}
 				}
 			}
-		}
-		if epoch%1000 == 0 {
 			var totalCost float64
 			for i := range len(inputs) {
 				if err = nnForward(nn, inputs[i]); err != nil {
@@ -245,8 +287,19 @@ func main() {
 				c, _ := nnCost(nn.a[L], Mat{rows: 1, cols: 1, data: targets[i]})
 				totalCost += c
 			}
-			fmt.Printf("epoch %d cost: %f\n", epoch, totalCost/4)
+			if len(cost) > 10000 {
+				cost = cost[1:]
+			}
+			cost = append(cost, float32(totalCost/4))
 		}
+		rl.BeginDrawing()
+		e := strconv.Itoa(epoch)
+		text := "Cost Visualizer epoch:" + e
+		rl.DrawText(text, int32((w/2)-len(text)), int32(h/16), 20, rl.Red)
+		rl.ClearBackground(rl.Black)
+		drawCost(cost, epochs)
+		rl.EndDrawing()
+		epoch++
 	}
 	for i := range len(inputs) {
 		nnOutput(nn, inputs[i])
@@ -254,12 +307,12 @@ func main() {
 }
 
 func nnOutput(nn *NN, input Mat) {
-	fmt.Printf("\n%f %f", input.data[0][0], input.data[1][0])
+	fmt.Printf("\n%d %d->", int(input.data[0][0]), int(input.data[1][0]))
 	if err := nnForward(nn, input); err != nil {
 		fmt.Println(err)
 		return
 	}
-	fmt.Print(nn.a[len(nn.size)-1])
+	fmt.Print(int(nn.a[len(nn.size)-1].data[0][0]))
 }
 
 func scaleMat(m Mat, val float64) Mat {
@@ -294,16 +347,6 @@ func finalGrad(a, y, x [][]float64) (Mat, []float64) {
 		}
 	}
 	return newMat, dz
-}
-
-func matT(a Mat) Mat {
-	newMat := matForm(a.cols, a.rows)
-	for i := range len(a.data) {
-		for j := range len(a.data[0]) {
-			newMat.data[j][i] = a.data[i][j]
-		}
-	}
-	return newMat
 }
 
 func hiddenGrad(delta []float64, w, a, z []Mat, wLast Mat) ([]Mat, [][]float64) {
